@@ -198,15 +198,16 @@ public class FootFlagEncoder extends AbstractFlagEncoder {
      */
     @Override
     public long acceptWay(ReaderWay way) {
+
         String highwayValue = way.getTag("highway");
         if (highwayValue == null) {
             long acceptPotentially = 0;
 
-            if (way.hasTag("route", ferries)) {
-                String footTag = way.getTag("foot");
-                if (footTag == null || "yes".equals(footTag))
-                    acceptPotentially = acceptBit | ferryBit;
-            }
+//            if (way.hasTag("route", ferries)) {
+//                String footTag = way.getTag("foot");
+//                if (footTag == null || "yes".equals(footTag))
+//                    acceptPotentially = acceptBit | ferryBit;
+//            }
 
             // special case not for all acceptedRailways, only platform
             if (way.hasTag("railway", "platform"))
