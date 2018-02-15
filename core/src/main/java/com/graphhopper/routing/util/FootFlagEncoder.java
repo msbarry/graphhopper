@@ -198,16 +198,15 @@ public class FootFlagEncoder extends AbstractFlagEncoder {
      */
     @Override
     public long acceptWay(ReaderWay way) {
-
         String highwayValue = way.getTag("highway");
         if (highwayValue == null) {
             long acceptPotentially = 0;
 
-//            if (way.hasTag("route", ferries)) {
-//                String footTag = way.getTag("foot");
-//                if (footTag == null || "yes".equals(footTag))
-//                    acceptPotentially = acceptBit | ferryBit;
-//            }
+            if (way.hasTag("route", ferries)) {
+                String footTag = way.getTag("foot");
+                if (footTag == null || "yes".equals(footTag))
+                    acceptPotentially = acceptBit | ferryBit;
+            }
 
             // special case not for all acceptedRailways, only platform
             if (way.hasTag("railway", "platform"))
@@ -277,6 +276,12 @@ public class FootFlagEncoder extends AbstractFlagEncoder {
         if (oldCode < code)
             return relationCodeEncoder.setValue(0, code);
         return oldRelationFlags;
+    }
+
+    @Override
+    protected double getFerrySpeed(ReaderWay way) {
+        // For our purposes, penalize ferries don't prevent them if there is no alternative
+        return 1;
     }
 
     @Override

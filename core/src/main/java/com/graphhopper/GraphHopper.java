@@ -855,6 +855,7 @@ public class GraphHopper implements GraphHopperAPI {
             GHUtility.sortDFS(ghStorage, newGraph);
             logger.info("graph sorted (" + getMemInfo() + ")");
             ghStorage = newGraph;
+            System.gc();
         }
 
         if (hasElevation()) {
