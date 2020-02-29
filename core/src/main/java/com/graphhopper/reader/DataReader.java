@@ -36,6 +36,8 @@ public interface DataReader {
 
     DataReader setWayPointMaxDistance(double wayPointMaxDistance);
 
+    DataReader setElevationMaxDistance(double elevationMaxDistance);
+
     DataReader setSmoothElevation(boolean smoothElevation);
 
     /**

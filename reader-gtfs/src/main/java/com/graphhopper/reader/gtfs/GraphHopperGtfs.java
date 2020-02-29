@@ -84,6 +84,11 @@ public class GraphHopperGtfs extends GraphHopperOSM {
                 }
 
                 @Override
+                public DataReader setElevationMaxDistance(double elevationMaxDistance) {
+                    return this;
+                }
+
+                @Override
                 public DataReader setSmoothElevation(boolean smoothElevation) {
                     return this;
                 }

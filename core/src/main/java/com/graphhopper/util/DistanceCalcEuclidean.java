@@ -28,10 +28,15 @@ import com.graphhopper.util.shapes.GHPoint;
  *
  * @author Peter Karich
  */
-public class DistanceCalc2D extends DistanceCalcEarth {
+public class DistanceCalcEuclidean extends DistanceCalcEarth {
     @Override
     public double calcDist(double fromY, double fromX, double toY, double toX) {
         return sqrt(calcNormalizedDist(fromY, fromX, toY, toX));
+    }
+
+    @Override
+    public double calcDist3d(double fromY, double fromX, double fromHeight, double toY, double toX, double toHeight) {
+        return sqrt(calcNormalizedDist(fromY, fromX, toY, toX) + calcNormalizedDist(toHeight - fromHeight));
     }
 
     @Override
