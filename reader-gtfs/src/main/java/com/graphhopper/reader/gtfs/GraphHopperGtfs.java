@@ -94,6 +94,11 @@ public class GraphHopperGtfs extends GraphHopperOSM {
                 }
 
                 @Override
+                public DataReader setLongEdgeSamplingDistance(double longEdgeSamplingDistance) {
+                    return this;
+                }
+
+                @Override
                 public void readGraph() {
 
                 }

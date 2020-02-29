@@ -77,6 +77,7 @@ public class OSMReader implements DataReader, TurnCostParser.ExternalInternalMap
     private final DistanceCalc distCalc = Helper.DIST_EARTH;
     private final DouglasPeucker simplifyAlgo = new DouglasPeucker();
     private boolean smoothElevation = false;
+    private double longEdgeSamplingDistance = 0;
     private final boolean exitOnlyPillarNodeException = true;
     private final Map<String, EdgeExplorer> outExplorerMap = new HashMap<>();
     private final Map<String, EdgeExplorer> inExplorerMap = new HashMap<>();
@@ -665,6 +666,9 @@ public class OSMReader implements DataReader, TurnCostParser.ExternalInternalMap
         if (pointList.getDimension() != nodeAccess.getDimension())
             throw new AssertionError("Dimension does not match for pointList vs. nodeAccess " + pointList.getDimension() + " <-> " + nodeAccess.getDimension());
 
+        if (this.longEdgeSamplingDistance > 0 && pointList.is3D())
+            pointList = EdgeSampling.sample(pointList, longEdgeSamplingDistance, distCalc, eleProvider);
+
         // Smooth the elevation before calculating the distance because the distance will be incorrect if calculated afterwards
         if (this.smoothElevation)
             pointList = GraphElevationSmoothing.smoothElevation(pointList);
@@ -929,6 +933,12 @@ public class OSMReader implements DataReader, TurnCostParser.ExternalInternalMap
     @Override
     public DataReader setSmoothElevation(boolean smoothElevation) {
         this.smoothElevation = smoothElevation;
+        return this;
+    }
+
+    @Override
+    public DataReader setLongEdgeSamplingDistance(double longEdgeSamplingDistance) {
+        this.longEdgeSamplingDistance = longEdgeSamplingDistance;
         return this;
     }
 

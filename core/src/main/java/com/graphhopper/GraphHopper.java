@@ -103,6 +103,7 @@ public class GraphHopper implements GraphHopperAPI {
     private boolean allowWrites = true;
     private boolean fullyLoaded = false;
     private boolean smoothElevation = false;
+    private double longEdgeSamplingDistance = 0;
     // for routing
     private final RoutingConfig routingConfig = new RoutingConfig();
 
@@ -563,6 +564,8 @@ public class GraphHopper implements GraphHopperAPI {
         this.smoothElevation = ghConfig.getBool("graph.elevation.smoothing", false);
         ElevationProvider elevationProvider = createElevationProvider(ghConfig);
         setElevationProvider(elevationProvider);
+        this.longEdgeSamplingDistance = ghConfig.getDouble("graph.elevation.long_edge_sampling_distance", longEdgeSamplingDistance);
+
 
         // optimizable prepare
         minNetworkSize = ghConfig.getInt("prepare.min_network_size", minNetworkSize);
@@ -757,7 +760,8 @@ public class GraphHopper implements GraphHopperAPI {
                 setWorkerThreads(dataReaderWorkerThreads).
                 setWayPointMaxDistance(dataReaderWayPointMaxDistance).
                 setElevationMaxDistance(dataReaderElevationMaxDistance).
-                setSmoothElevation(this.smoothElevation);
+                setSmoothElevation(smoothElevation).
+                setLongEdgeSamplingDistance(longEdgeSamplingDistance);
     }
 
     /**

@@ -40,6 +40,8 @@ public interface DataReader {
 
     DataReader setSmoothElevation(boolean smoothElevation);
 
+    DataReader setLongEdgeSamplingDistance(double longEdgeSamplingDistance);
+
     /**
      * This method triggers reading the underlying data to create a graph
      */
