@@ -89,6 +89,14 @@ public class DouglasPeucker {
         return simplify(points, fromIndex, lastIndex, true);
     }
 
+    public int simplifyExcludeFirstLast(PointList points) {
+        return simplify(points, 0, points.size() - 1, true, true);
+    }
+
+    public int simplify(PointList points, int fromIndex, int lastIndex, boolean compress) {
+        return simplify(points, fromIndex, lastIndex, compress, false);
+    }
+
     /**
      * Simplifies a part of the <code>points</code>. The <code>fromIndex</code> and <code>lastIndex</code>
      * are guaranteed to be kept.
@@ -100,7 +108,7 @@ public class DouglasPeucker {
      *                  are actually removed, but instead their lat/lon/ele is only set to NaN
      * @return The number of removed points
      */
-    public int simplify(PointList points, int fromIndex, int lastIndex, boolean compress) {
+    public int simplify(PointList points, int fromIndex, int lastIndex, boolean compress, boolean excludeFirstLast) {
         int removed = 0;
         int size = lastIndex - fromIndex;
         if (approx) {
@@ -116,7 +124,12 @@ public class DouglasPeucker {
             removed = subSimplify(points, fromIndex, lastIndex);
         }
 
-        if (removed > 0 && compress)
+        if (excludeFirstLast) {
+            points.set(fromIndex, Double.NaN, Double.NaN, Double.NaN);
+            points.set(lastIndex, Double.NaN, Double.NaN, Double.NaN);
+        }
+
+        if ((removed > 0 || excludeFirstLast) && compress)
             removeNaN(points);
 
         return removed;

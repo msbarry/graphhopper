@@ -109,7 +109,6 @@ public class Parameters {
          */
         public static final String WAY_POINT_MAX_DISTANCE = "way_point_max_distance";
         public static final String INIT_WAY_POINT_MAX_DISTANCE = ROUTING_INIT_PREFIX + "way_point_max_distance";
-        public static final String INIT_ELEVATION_MAX_DISTANCE = ROUTING_INIT_PREFIX + "elevation_max_distance";
         /**
          * true or false. If routes at via points should avoid u-turns. (not for CH) See related
          * 'heading' parameter:
