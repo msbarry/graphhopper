@@ -16,7 +16,7 @@ public class EdgeSampling {
             thisLon = input.getLon(i);
             thisEle = input.getEle(i);
             if (i > 0 && !distCalc.isCrossBoundary(lastLon, thisLon)) {
-                double segments = Math.round(distCalc.calcDist(lastLat, lastLon, thisLat, thisLon) / maxDistance);
+                double segments = Math.round(distCalc.calcDist(lastLat, lastLon, thisLat, thisLon) / maxDistance) - 0.5;
                 for (double segment = 1; segment < segments; segment++) {
                     double ratio = segment / segments;
                     double lat = lastLat + (thisLat - lastLat) * ratio;
