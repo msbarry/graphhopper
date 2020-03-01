@@ -21,6 +21,7 @@ import com.carrotsearch.hppc.*;
 import com.graphhopper.coll.LongIntMap;
 import com.graphhopper.coll.*;
 import com.graphhopper.reader.*;
+import com.graphhopper.reader.dem.EdgeSampling;
 import com.graphhopper.reader.dem.ElevationProvider;
 import com.graphhopper.reader.dem.GraphElevationSmoothing;
 import com.graphhopper.routing.profiles.BooleanEncodedValue;
@@ -666,6 +667,8 @@ public class OSMReader implements DataReader, TurnCostParser.ExternalInternalMap
         if (pointList.getDimension() != nodeAccess.getDimension())
             throw new AssertionError("Dimension does not match for pointList vs. nodeAccess " + pointList.getDimension() + " <-> " + nodeAccess.getDimension());
 
+        int initialSize = pointList.getSize();
+
         if (this.longEdgeSamplingDistance > 0 && pointList.is3D())
             pointList = EdgeSampling.sample(pointList, longEdgeSamplingDistance, distCalc, eleProvider);
 
@@ -678,7 +681,6 @@ public class OSMReader implements DataReader, TurnCostParser.ExternalInternalMap
         double prevLon = pointList.getLongitude(0);
         double prevEle = pointList.is3D() ? pointList.getElevation(0) : Double.NaN;
         double lat, lon, ele = Double.NaN;
-        PointList pillarNodes = new PointList(pointList.getSize() - 2, nodeAccess.is3D());
         int nodes = pointList.getSize();
         for (int i = 1; i < nodes; i++) {
             // we could save some lines if we would use pointList.calcDistance(distCalc);
@@ -694,12 +696,6 @@ public class OSMReader implements DataReader, TurnCostParser.ExternalInternalMap
 
             prevLat = lat;
             prevLon = lon;
-            if (nodes > 2 && i < nodes - 1) {
-                if (pillarNodes.is3D())
-                    pillarNodes.add(lat, lon, ele);
-                else
-                    pillarNodes.add(lat, lon);
-            }
         }
         if (towerNodeDistance < 0.001) {
             // As investigation shows often two paths should have crossed via one identical point 
@@ -723,11 +719,11 @@ public class OSMReader implements DataReader, TurnCostParser.ExternalInternalMap
 
         EdgeIteratorState iter = graph.edge(fromIndex, toIndex).setDistance(towerNodeDistance).setFlags(flags);
 
-        if (nodes > 2) {
-            if (doSimplify)
-                simplifyAlgo.simplify(pillarNodes);
+        if (doSimplify)
+            simplifyAlgo.simplifyExcludeFirstLast(pointList);
 
-            iter.setWayGeometry(pillarNodes);
+        if (!pointList.isEmpty()) {
+            iter.setWayGeometry(pointList);
         }
         storeOsmWayID(iter.getEdge(), wayOsmId);
         return iter;

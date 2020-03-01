@@ -581,7 +581,7 @@ public class GraphHopper implements GraphHopperAPI {
         // osm import
         dataReaderWayPointMaxDistance = ghConfig.getDouble(Routing.INIT_WAY_POINT_MAX_DISTANCE, dataReaderWayPointMaxDistance);
         dataReaderElevationMaxDistance = ghConfig.getDouble(
-                Routing.INIT_ELEVATION_MAX_DISTANCE,
+                "graph.elevation.elevation_max_distance",
                 dataReaderElevationMaxDistance);
 
         dataReaderWorkerThreads = ghConfig.getInt("datareader.worker_threads", dataReaderWorkerThreads);
