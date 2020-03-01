@@ -75,9 +75,9 @@ public class OSMReader implements DataReader, TurnCostParser.ExternalInternalMap
     private final NodeAccess nodeAccess;
     private final LongIndexedContainer barrierNodeIds = new LongArrayList();
     private final DistanceCalc distCalc = Helper.DIST_EARTH;
-    private final DistanceCalc3D distCalc3D = Helper.DIST_3D;
     private final DouglasPeucker simplifyAlgo = new DouglasPeucker();
     private boolean smoothElevation = false;
+    private double longEdgeSamplingDistance = 0;
     private final boolean exitOnlyPillarNodeException = true;
     private final Map<String, EdgeExplorer> outExplorerMap = new HashMap<>();
     private final Map<String, EdgeExplorer> inExplorerMap = new HashMap<>();
@@ -666,6 +666,9 @@ public class OSMReader implements DataReader, TurnCostParser.ExternalInternalMap
         if (pointList.getDimension() != nodeAccess.getDimension())
             throw new AssertionError("Dimension does not match for pointList vs. nodeAccess " + pointList.getDimension() + " <-> " + nodeAccess.getDimension());
 
+        if (this.longEdgeSamplingDistance > 0 && pointList.is3D())
+            pointList = EdgeSampling.sample(pointList, longEdgeSamplingDistance, distCalc, eleProvider);
+
         // Smooth the elevation before calculating the distance because the distance will be incorrect if calculated afterwards
         if (this.smoothElevation)
             pointList = GraphElevationSmoothing.smoothElevation(pointList);
@@ -684,7 +687,7 @@ public class OSMReader implements DataReader, TurnCostParser.ExternalInternalMap
             if (pointList.is3D()) {
                 ele = pointList.getElevation(i);
                 if (!distCalc.isCrossBoundary(lon, prevLon))
-                    towerNodeDistance += distCalc3D.calcDist(prevLat, prevLon, prevEle, lat, lon, ele);
+                    towerNodeDistance += distCalc.calcDist3d(prevLat, prevLon, prevEle, lat, lon, ele);
                 prevEle = ele;
             } else if (!distCalc.isCrossBoundary(lon, prevLon))
                 towerNodeDistance += distCalc.calcDist(prevLat, prevLon, lat, lon);
@@ -922,8 +925,20 @@ public class OSMReader implements DataReader, TurnCostParser.ExternalInternalMap
     }
 
     @Override
+    public OSMReader setElevationMaxDistance(double elevationMaxDistance) {
+        simplifyAlgo.setElevationMaxDistance(elevationMaxDistance);
+        return this;
+    }
+
+    @Override
     public DataReader setSmoothElevation(boolean smoothElevation) {
         this.smoothElevation = smoothElevation;
+        return this;
+    }
+
+    @Override
+    public DataReader setLongEdgeSamplingDistance(double longEdgeSamplingDistance) {
+        this.longEdgeSamplingDistance = longEdgeSamplingDistance;
         return this;
     }
 

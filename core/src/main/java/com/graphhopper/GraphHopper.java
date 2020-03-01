@@ -103,6 +103,7 @@ public class GraphHopper implements GraphHopperAPI {
     private boolean allowWrites = true;
     private boolean fullyLoaded = false;
     private boolean smoothElevation = false;
+    private double longEdgeSamplingDistance = 0;
     // for routing
     private final RoutingConfig routingConfig = new RoutingConfig();
 
@@ -121,6 +122,7 @@ public class GraphHopper implements GraphHopperAPI {
     // for data reader
     private String dataReaderFile;
     private double dataReaderWayPointMaxDistance = 1;
+    private double dataReaderElevationMaxDistance = 0;
     private int dataReaderWorkerThreads = 2;
     private ElevationProvider eleProvider = ElevationProvider.NOOP;
     private FlagEncoderFactory flagEncoderFactory = new DefaultFlagEncoderFactory();
@@ -194,11 +196,28 @@ public class GraphHopper implements GraphHopperAPI {
     }
 
     /**
+     * Return elevation max distance (in meter) used while reducing points via douglas peucker during OSM import.
+     */
+    protected double getElevationMaxDistance() {
+        return dataReaderElevationMaxDistance;
+    }
+
+    /**
      * This parameter specifies how to reduce points via douglas peucker while OSM import. Higher
      * value means more details, unit is meter. Default is 1. Disable via 0.
      */
     public GraphHopper setWayPointMaxDistance(double wayPointMaxDistance) {
         this.dataReaderWayPointMaxDistance = wayPointMaxDistance;
+        return this;
+    }
+
+    /**
+     * This parameter specifies how much weight to give to elevation differences when reducing points
+     * via douglas peucker while OSM import. Higher value means less elevation detail is retained on straight lines.
+     * Disable via 0.
+     */
+    public GraphHopper setElevationMaxDistance(double elevationMaxDistance) {
+        this.dataReaderElevationMaxDistance = elevationMaxDistance;
         return this;
     }
 
@@ -545,6 +564,8 @@ public class GraphHopper implements GraphHopperAPI {
         this.smoothElevation = ghConfig.getBool("graph.elevation.smoothing", false);
         ElevationProvider elevationProvider = createElevationProvider(ghConfig);
         setElevationProvider(elevationProvider);
+        this.longEdgeSamplingDistance = ghConfig.getDouble("graph.elevation.long_edge_sampling_distance", longEdgeSamplingDistance);
+
 
         // optimizable prepare
         minNetworkSize = ghConfig.getInt("prepare.min_network_size", minNetworkSize);
@@ -559,6 +580,9 @@ public class GraphHopper implements GraphHopperAPI {
 
         // osm import
         dataReaderWayPointMaxDistance = ghConfig.getDouble(Routing.INIT_WAY_POINT_MAX_DISTANCE, dataReaderWayPointMaxDistance);
+        dataReaderElevationMaxDistance = ghConfig.getDouble(
+                Routing.INIT_ELEVATION_MAX_DISTANCE,
+                dataReaderElevationMaxDistance);
 
         dataReaderWorkerThreads = ghConfig.getInt("datareader.worker_threads", dataReaderWorkerThreads);
 
@@ -741,7 +765,9 @@ public class GraphHopper implements GraphHopperAPI {
                 setElevationProvider(eleProvider).
                 setWorkerThreads(dataReaderWorkerThreads).
                 setWayPointMaxDistance(dataReaderWayPointMaxDistance).
-                setSmoothElevation(this.smoothElevation);
+                setElevationMaxDistance(dataReaderElevationMaxDistance).
+                setSmoothElevation(smoothElevation).
+                setLongEdgeSamplingDistance(longEdgeSamplingDistance);
     }
 
     /**
@@ -1148,7 +1174,9 @@ public class GraphHopper implements GraphHopperAPI {
             boolean tmpCalcPoints = hints.getBool(Routing.CALC_POINTS, routingConfig.isCalcPoints());
             double wayPointMaxDistance = hints.getDouble(Routing.WAY_POINT_MAX_DISTANCE, 1d);
 
-            DouglasPeucker peucker = new DouglasPeucker().setMaxDistance(wayPointMaxDistance);
+            DouglasPeucker peucker = new DouglasPeucker().
+                    setMaxDistance(wayPointMaxDistance).
+                    setElevationMaxDistance(dataReaderElevationMaxDistance);
             PathMerger pathMerger = new PathMerger(queryGraph.getBaseGraph(), weighting).
                     setCalcPoints(tmpCalcPoints).
                     setDouglasPeucker(peucker).
@@ -1222,7 +1250,7 @@ public class GraphHopper implements GraphHopperAPI {
         GHPoint lastPoint = points.get(0);
         GHPoint point;
         double dist;
-        DistanceCalc calc = DIST_3D;
+        DistanceCalc calc = DIST_EARTH;
         for (int i = 1; i < points.size(); i++) {
             point = points.get(i);
             dist = calc.calcDist(lastPoint.getLat(), lastPoint.getLon(), point.getLat(), point.getLon());
