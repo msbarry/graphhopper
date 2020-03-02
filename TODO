@@ -1,4 +1,0 @@
-TODO
-- implement euclidean edge distance
-- performance test polyline simplification
-  - try euclidean project first, then simplify
