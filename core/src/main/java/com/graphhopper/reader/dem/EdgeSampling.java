@@ -3,6 +3,10 @@ package com.graphhopper.reader.dem;
 import com.graphhopper.util.DistanceCalc;
 import com.graphhopper.util.PointList;
 
+/**
+ * Ensures that elevation is sampled along a point list with no more than maxDistance between samples. Works by adding
+ * points along long edges and fetching elevation at each inserted point.
+ */
 public class EdgeSampling {
     private EdgeSampling() {}
 

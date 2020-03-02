@@ -84,4 +84,20 @@ public class EdgeSamplingTest {
         assertEquals("(0.0,0.0,0.0), (1.0,0.0,10.0), (2.0,0.0,10.0), (3.0,0.0,0.0)", out.toString());
     }
 
+    @Test
+    public void doesntAddPointsCrossingInternationalDateLine() {
+        PointList in = new PointList(2, true);
+        in.add(0, -179, 0);
+        in.add(0.0, 179, 0);
+
+        PointList out = EdgeSampling.sample(
+                in,
+                DistanceCalcEarth.METERS_PER_DEGREE,
+                new DistanceCalcEarth(),
+                elevation
+        );
+
+        assertEquals("(0.0,-179.0,0.0), (0.0,179.0,0.0)", out.toString());
+    }
+
 }
