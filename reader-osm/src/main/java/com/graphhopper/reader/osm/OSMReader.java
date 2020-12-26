@@ -18,6 +18,8 @@
 package com.graphhopper.reader.osm;
 
 import com.carrotsearch.hppc.*;
+import com.carrotsearch.hppc.cursors.IntCursor;
+import com.carrotsearch.hppc.cursors.LongCursor;
 import com.graphhopper.coll.LongIntMap;
 import com.graphhopper.coll.*;
 import com.graphhopper.reader.*;
@@ -30,13 +32,30 @@ import com.graphhopper.routing.util.parsers.TurnCostParser;
 import com.graphhopper.storage.*;
 import com.graphhopper.util.*;
 import com.graphhopper.util.shapes.GHPoint;
+import com.wdtinc.mapbox_vector_tile.VectorTile;
+import com.wdtinc.mapbox_vector_tile.build.MvtLayerBuild;
+import com.wdtinc.mapbox_vector_tile.build.MvtLayerParams;
+import com.wdtinc.mapbox_vector_tile.build.MvtLayerProps;
+import no.ecc.vectortile.VectorTileEncoder;
+import org.imintel.mbtiles4j.*;
+import org.imintel.mbtiles4j.model.MetadataEntry;
+import org.locationtech.jts.geom.Coordinate;
+import org.locationtech.jts.geom.Geometry;
+import org.locationtech.jts.geom.GeometryFactory;
+import org.locationtech.jts.geom.Point;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.xml.stream.XMLStreamException;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.SQLException;
 import java.util.*;
+import java.util.zip.GZIPOutputStream;
 
 import static com.graphhopper.util.Helper.nf;
 
@@ -85,7 +104,7 @@ public class OSMReader implements DataReader, TurnCostParser.ExternalInternalMap
     private long skippedLocations;
     private final EncodingManager encodingManager;
     private int workerThreads = 2;
-    // Choosing the best Map<Long, Integer> is hard. We need a memory efficient and fast solution for big data sets!
+    // Using the correct Map<Long, Integer> is hard. We need a memory efficient and fast solution for big data sets!
     //
     // very slow: new SparseLongLongArray
     // only append and update possible (no unordered storage like with this doubleParse): new OSMIDMap
@@ -140,11 +159,17 @@ public class OSMReader implements DataReader, TurnCostParser.ExternalInternalMap
             throw new IllegalStateException("Your specified OSM file does not exist:" + osmFile.getAbsolutePath());
 
         StopWatch sw1 = new StopWatch().start();
-        preProcess(osmFile);
+        try {
+            preProcess(osmFile);
+            writeOsmToGraph(osmFile);
+        } catch (SQLException throwables) {
+            throwables.printStackTrace();
+        }
+        System.out.println(getNodeMap().getSize() + " nodes");
+        System.exit(0);
         sw1.stop();
 
         StopWatch sw2 = new StopWatch().start();
-        writeOsmToGraph(osmFile);
         sw2.stop();
 
         LOGGER.info("time pass1:" + (int) sw1.getSeconds() + "s, "
@@ -152,21 +177,110 @@ public class OSMReader implements DataReader, TurnCostParser.ExternalInternalMap
                 + "total:" + (int) (sw1.getSeconds() + sw2.getSeconds()) + "s");
     }
 
+    private static final long max_zoom = 1<<14;
+    private static final long max_bits = 14 + 12;
+    int tileKey(double worldX, double worldY, int z) {
+        int x = (int)(worldX * (1 << z));
+        int y = (int)(worldY * (1 << z));
+        return (z << 28) | (x << 14) | y;
+    }
+    Coordinate tileCoordinate(double worldX, double worldY, int z) {
+        double x = (worldX * (1 << z)) % 1;
+        double y = (worldY * (1 << z)) % 1;
+        return new Coordinate(x * 256, y * 256);
+    }
+    int zk(int key) {
+        int result = key >> 28;
+        return result < 0 ? 16 + result : result;
+    }
+    int kx(int key) {
+        return (key>>14)&((1<<14)-1);
+    }
+    int ky(int key) {
+        return (key)&((1<<14)-1);
+    }
+    IntObjectMap<VectorTileEncoder> tiles = new GHIntObjectHashMap<>();
+
     /**
      * Preprocessing of OSM file to select nodes which are used for highways. This allows a more
      * compact graph data structure.
      */
-    void preProcess(File osmFile) {
+    void preProcess(File osmFile) throws SQLException {
         LOGGER.info("Starting to process OSM file: '" + osmFile + "'");
+        GeometryFactory gf = new GeometryFactory();
+        double minLat = 90;
+        double maxLat = -90;
+        double minLon = 180;
+        double maxLon = -180;
+        int lastType = -1;
+
+        // node: tags, lat, lon
+        // way: tags, node: Seq[NodeId]
+        // relation: tags, "role", Seq[Type, NodeId, "role"]
+        // order:
+        // - nodes
+        // - ways
+        // - relations
+
+        // - way: nodes, relations
+
+        // pass 1 - output node features
+        //        - store nodes by way
+        //        -
+        // pass 2 - way features
+        //        - store ways
+        //
+
         try (OSMInput in = openOsmInputFile(osmFile)) {
             long tmpWayCounter = 1;
             long tmpRelationCounter = 1;
             ReaderElement item;
             while ((item = in.getNext()) != null) {
-                if (item.isType(ReaderElement.WAY)) {
+                if (item.isType(ReaderElement.NODE)) {
+                    final ReaderNode node = (ReaderNode) item;
+                    if (node.hasTag("natural", "peak", "volcano")) {
+                        double worldX = (node.getLon() + 180) / 360;
+                        double worldY = (1 - Math.log(Math.tan(Math.toRadians(node.getLat())) + 1 / Math.cos(Math.toRadians(node.getLat()))) / Math.PI) / 2;
+                        minLat = Math.min(minLat, node.getLat());
+                        maxLat = Math.max(maxLat, node.getLat());
+                        minLon = Math.min(minLon, node.getLon());
+                        maxLon = Math.max(maxLon, node.getLon());
+                        for (int z = 14; z >= 0; z--) {
+                            int tile = tileKey(worldX, worldY, z);
+                            VectorTileEncoder en = tiles.get(tile);
+                            if (en == null) {
+                                en = new VectorTileEncoder();
+                                tiles.put(tile, en);
+                            }
+                            Map<String, Object> attrs = new HashMap<>();
+                            attrs.put("name:latin", "mountain");
+                            en.addFeature("mountain_peak", attrs, gf.createPoint(tileCoordinate(worldX, worldY, z)));
+//                            System.err.println(gf.createPoint(tileCoordinate(worldX, worldY, z)));
+                        }
+                    } else if (node.hasTag("addr:housenumber")) {
+                        double worldX = (node.getLon() + 180) / 360;
+                        double worldY = (1 - Math.log(Math.tan(Math.toRadians(node.getLat())) + 1 / Math.cos(Math.toRadians(node.getLat()))) / Math.PI) / 2;
+                        minLat = Math.min(minLat, node.getLat());
+                        maxLat = Math.max(maxLat, node.getLat());
+                        minLon = Math.min(minLon, node.getLon());
+                        maxLon = Math.max(maxLon, node.getLon());
+                        for (int z = 14; z >= 14; z--) {
+                            int tile = tileKey(worldX, worldY, z);
+                            VectorTileEncoder en = tiles.get(tile);
+                            if (en == null) {
+                                en = new VectorTileEncoder();
+                                tiles.put(tile, en);
+                            }
+                            Map<String, Object> attrs = new HashMap<>();
+                            attrs.put("housenumber", node.getTag("addr:housenumber"));
+                            en.addFeature("housenumber", attrs, gf.createPoint(tileCoordinate(worldX, worldY, z)));
+                        }
+                    }
+                } else if (item.isType(ReaderElement.WAY)) {
                     final ReaderWay way = (ReaderWay) item;
-                    boolean valid = filterWay(way);
-                    if (valid) {
+                    boolean valid = way.hasTag("building");
+                    boolean valid2 = way.hasTag("addr:housenumber");
+                    if (valid || valid2) {
                         LongIndexedContainer wayNodes = way.getNodes();
                         int s = wayNodes.size();
                         for (int index = 0; index < s; index++) {
@@ -179,18 +293,18 @@ public class OSMReader implements DataReader, TurnCostParser.ExternalInternalMap
                         }
                     }
                 } else if (item.isType(ReaderElement.RELATION)) {
-                    final ReaderRelation relation = (ReaderRelation) item;
-                    if (!relation.isMetaRelation() && relation.hasTag("type", "route"))
-                        prepareWaysWithRelationInfo(relation);
-
-                    if (relation.hasTag("type", "restriction")) {
-                        prepareRestrictionRelation(relation);
-                    }
-
-                    if (++tmpRelationCounter % 100_000 == 0) {
-                        LOGGER.info(nf(tmpRelationCounter) + " (preprocess), osmWayMap:" + nf(getRelFlagsMapSize())
-                                + " " + Helper.getMemInfo());
-                    }
+//                    final ReaderRelation relation = (ReaderRelation) item;
+//                    if (!relation.isMetaRelation() && relation.hasTag("type", "route"))
+//                        prepareWaysWithRelationInfo(relation);
+//
+//                    if (relation.hasTag("type", "restriction")) {
+//                        prepareRestrictionRelation(relation);
+//                    }
+//
+//                    if (++tmpRelationCounter % 100_000 == 0) {
+//                        LOGGER.info(nf(tmpRelationCounter) + " (preprocess), osmWayMap:" + nf(getRelFlagsMapSize())
+//                                + " " + Helper.getMemInfo());
+//                    }
                 } else if (item.isType(ReaderElement.FILEHEADER)) {
                     final OSMFileHeader fileHeader = (OSMFileHeader) item;
                     osmDataDate = Helper.createFormatter().parse(fileHeader.getTag("timestamp"));
@@ -199,6 +313,37 @@ public class OSMReader implements DataReader, TurnCostParser.ExternalInternalMap
             }
         } catch (Exception ex) {
             throw new RuntimeException("Problem while parsing file", ex);
+        }
+
+    }
+
+    private static byte[] gzipCompress(byte[] uncompressedData) {
+        byte[] result = new byte[]{};
+        try (ByteArrayOutputStream bos = new ByteArrayOutputStream(uncompressedData.length);
+             GZIPOutputStream gzipOS = new GZIPOutputStream(bos)) {
+            gzipOS.write(uncompressedData);
+            // You need to close it before using bos
+            gzipOS.close();
+            result = bos.toByteArray();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        return result;
+    }
+
+
+
+    public static void addTile(Connection connection, byte[] bytes, long zoom, long column, long row) throws MBTilesException {
+        try {
+            PreparedStatement stmt = connection.prepareStatement("INSERT INTO tiles (zoom_level,tile_column,tile_row,tile_data) VALUES(?,?,?,?)");
+            stmt.setInt(1, (int)zoom);
+            stmt.setInt(2, (int)column);
+            stmt.setInt(3, (int)row);
+            stmt.setBytes(4, bytes);
+            stmt.execute();
+            stmt.close();
+        } catch (SQLException var9) {
+            throw new MBTilesException("Add Tile failed.", var9);
         }
     }
 
@@ -241,10 +386,26 @@ public class OSMReader implements DataReader, TurnCostParser.ExternalInternalMap
         return encodingManager.acceptWay(item, new EncodingManager.AcceptWay());
     }
 
+
+    long encodeLocation(double lon, double lat) {
+        long x = Math.round(Math.pow(2, 26) * (lat + 90) / 180);
+        long y = Math.round(Math.pow(2, 26) * (lon + 180) / 360);
+        return x << 26 | y;
+    }
+
+    double decodeLat(long encoded) {
+        return 2 * (((encoded & ((1<<27) - 1)) / Math.pow(2, 26)) * 180 - 90);
+    }
+
+    double decodeLon(long encoded) {
+        return (((encoded >> 26) / Math.pow(2, 26)) * 360.0 - 180.0) / 2;
+    }
+
     /**
      * Creates the graph with edges and nodes from the specified osm file.
      */
-    private void writeOsmToGraph(File osmFile) {
+    private void writeOsmToGraph(File osmFile) throws SQLException {
+        GeometryFactory gf = new GeometryFactory();
         int tmp = (int) Math.max(getNodeMap().getSize() / 50, 100);
         LOGGER.info("creating graph. Found nodes (pillar+tower):" + nf(getNodeMap().getSize()) + ", " + Helper.getMemInfo());
         ghStorage.create(tmp);
@@ -252,6 +413,7 @@ public class OSMReader implements DataReader, TurnCostParser.ExternalInternalMap
         long wayStart = -1;
         long relationStart = -1;
         long counter = 1;
+        LongLongMap nodeLocations = new GHLongLongHashMap();
         try (OSMInput in = openOsmInputFile(osmFile)) {
             LongIntMap nodeFilter = getNodeMap();
 
@@ -260,7 +422,8 @@ public class OSMReader implements DataReader, TurnCostParser.ExternalInternalMap
                 switch (item.getType()) {
                     case ReaderElement.NODE:
                         if (nodeFilter.get(item.getId()) != EMPTY_NODE) {
-                            processNode((ReaderNode) item);
+                            ReaderNode node = (ReaderNode) item;
+                            nodeLocations.put(node.getId(), encodeLocation(node.getLon(), node.getLat()));
                         }
                         break;
 
@@ -269,21 +432,69 @@ public class OSMReader implements DataReader, TurnCostParser.ExternalInternalMap
                             LOGGER.info(nf(counter) + ", now parsing ways");
                             wayStart = counter;
                         }
-                        processWay((ReaderWay) item);
+                        ReaderWay way = (ReaderWay) item;
+                        if (way.hasTag("addr:housenumber")) {
+                            double lat = 0;
+                            double lon = 0;
+                            for (LongCursor node : way.getNodes()) {
+                                lat += decodeLat(nodeLocations.get(node.value));
+                                lon += decodeLat(nodeLocations.get(node.value));
+                            }
+                            lat /= way.getNodes().size();
+                            lon /= way.getNodes().size();
+                            double worldX = (lon + 180) / 360;
+                            double worldY = (1 - Math.log(Math.tan(Math.toRadians(lat)) + 1 / Math.cos(Math.toRadians(lat))) / Math.PI) / 2;
+                            for (int z = 14; z >= 14; z--) {
+                                int tile = tileKey(worldX, worldY, z);
+                                VectorTileEncoder en = tiles.get(tile);
+                                if (en == null) {
+                                    en = new VectorTileEncoder();
+                                    tiles.put(tile, en);
+                                }
+                                Map<String, Object> attrs = new HashMap<>();
+                                attrs.put("housenumber", way.getTag("addr:housenumber"));
+                                en.addFeature("housenumber", attrs, gf.createPoint(tileCoordinate(worldX, worldY, z)));
+                            }
+
+                        } else if (way.hasTag("building")) {
+                            C
+                            double lat = 0;
+                            double lon = 0;
+                            for (LongCursor node : way.getNodes()) {
+                                lat += decodeLat(nodeLocations.get(node.value));
+                                lon += decodeLat(nodeLocations.get(node.value));
+                            }
+                            lat /= way.getNodes().size();
+                            lon /= way.getNodes().size();
+                            double worldX = (lon + 180) / 360;
+                            double worldY = (1 - Math.log(Math.tan(Math.toRadians(lat)) + 1 / Math.cos(Math.toRadians(lat))) / Math.PI) / 2;
+                            for (int z = 14; z >= 14; z--) {
+                                int tile = tileKey(worldX, worldY, z);
+                                VectorTileEncoder en = tiles.get(tile);
+                                if (en == null) {
+                                    en = new VectorTileEncoder();
+                                    tiles.put(tile, en);
+                                }
+                                Map<String, Object> attrs = new HashMap<>();
+                                attrs.put("housenumber", way.getTag("addr:housenumber"));
+                                en.addFeature("housenumber", attrs, gf.createPoint(tileCoordinate(worldX, worldY, z)));
+                            }
+
+                        }
                         break;
                     case ReaderElement.RELATION:
                         if (relationStart < 0) {
                             LOGGER.info(nf(counter) + ", now parsing relations");
                             relationStart = counter;
                         }
-                        processRelation((ReaderRelation) item);
+//                        processRelation((ReaderRelation) item);
                         break;
                     case ReaderElement.FILEHEADER:
                         break;
                     default:
                         throw new IllegalStateException("Unknown type " + item.getType());
                 }
-                if (++counter % 200_000_000 == 0) {
+                if (++counter % 20_000_000 == 0) {
                     LOGGER.info(nf(counter) + ", locs:" + nf(locations) + " (" + skippedLocations + ") " + Helper.getMemInfo());
                 }
             }
@@ -296,9 +507,57 @@ public class OSMReader implements DataReader, TurnCostParser.ExternalInternalMap
             throw new RuntimeException("Couldn't process file " + osmFile + ", error: " + ex.getMessage(), ex);
         }
 
-        finishedReading();
-        if (graph.getNodes() == 0)
-            throw new RuntimeException("Graph after reading OSM must not be empty. Read " + counter + " items and " + locations + " locations");
+
+        System.err.println("Writing " + tiles.size() + " tiles...");
+        StopWatch watch = new StopWatch().start();
+        Writer w = null;
+        try {
+            w = new Writer(new File("example.mbtiles"));
+            PreparedStatement stmt = w.getConnection().prepareStatement("INSERT INTO tiles (zoom_level,tile_column,tile_row,tile_data) VALUES (?,?,?,?),(?,?,?,?),(?,?,?,?),(?,?,?,?),(?,?,?,?)");
+            try {
+                SQLHelper.execute(w.getConnection(), "PRAGMA synchronous = OFF");
+            } catch (MBTilesException e) {
+                e.printStackTrace();
+            }
+            MetadataEntry ent = new MetadataEntry();
+            ent.setTilesetName("openmaptiles")
+                    .setTilesetType(MetadataEntry.TileSetType.BASE_LAYER)
+                    .setTilesetVersion("3.0")
+                    .setTilesetDescription("An example tileset description")
+                    .setTileMimeType(MetadataEntry.TileMimeType.PNG)
+                    .setAttribution("Tiles are Open Source!")
+                    .setTilesetBounds(-180,-80,180,80)//minLon, minLat, maxLon, maxLat)
+                    .addCustomKeyValue("center", "0,0,1")
+                    .addCustomKeyValue("minzoom", "0")
+                    .addCustomKeyValue("maxzoom", "14")
+                    .addCustomKeyValue("format", "pbf")
+                    .addCustomKeyValue("json", "{\"vector_layers\":[{\"id\":\"mountain_peak\",\"fields\":{\"class\":\"String\",\"ele\":\"Number\",\"ele_ft\":\"Number\",\"name:latin\":\"String\",\"rank\":\"Number\"},\"minzoom\":0,\"maxzoom\":14},{\"id\":\"housenumber\",\"fields\":{\"class\":\"String\",\"ele\":\"Number\",\"ele_ft\":\"Number\",\"housenumber\":\"String\",\"rank\":\"Number\"},\"minzoom\":14,\"maxzoom\":14}]}");
+            w.addMetadataEntry(ent);
+
+            int num = 0;
+            for (IntCursor key : tiles.keys()) {
+
+                VectorTileEncoder en = tiles.get(key.value);
+                int x = kx(key.value);
+                int y = ky(key.value);
+                int z = zk(key.value);
+                stmt.setInt((num % 5) * 4 + 1, (int)z);
+                stmt.setInt((num % 5) * 4 + 2, (int)x);
+                stmt.setInt((num % 5) * 4 + 3, (1<<z) - 1 - (int)y);
+                stmt.setBytes((num % 5) * 4 + 4, gzipCompress(en.encode()));
+                if (num % 5 == 1) {
+                    stmt.execute();
+                }
+                num++;
+            }
+            File result = w.close();
+        } catch (MBTilesWriteException e) {
+            e.printStackTrace();
+        } finally {
+            File result = w.close();
+        }
+        System.err.println("wrote tiles in " + (watch.stop().getMillis()) + "ms (" + (Math.round(tiles.size() / watch.getCurrentSeconds())) + "/s)");
+        System.exit(0);
     }
 
     protected OSMInput openOsmInputFile(File osmFile) throws XMLStreamException, IOException {
@@ -542,16 +801,7 @@ public class OSMReader implements DataReader, TurnCostParser.ExternalInternalMap
     }
 
     void prepareHighwayNode(long osmId) {
-        int tmpGHNodeId = getNodeMap().get(osmId);
-        if (tmpGHNodeId == EMPTY_NODE) {
-            // this is the first time we see this osmId
-            getNodeMap().put(osmId, PILLAR_NODE);
-        } else if (tmpGHNodeId > EMPTY_NODE) {
-            // mark node as tower node as it now occurred for at least the second time
-            getNodeMap().put(osmId, TOWER_NODE);
-        } else {
-            // tmpIndex is already negative (already tower node)
-        }
+        getNodeMap().put(osmId, PILLAR_NODE);
     }
 
     int addTowerNode(long osmId, double lat, double lon, double ele) {
@@ -570,14 +820,14 @@ public class OSMReader implements DataReader, TurnCostParser.ExternalInternalMap
      * This method creates from an OSM way (via the osm ids) one or more edges in the graph.
      */
     Collection<EdgeIteratorState> addOSMWay(final LongIndexedContainer osmNodeIds, final IntsRef flags, final long wayOsmId) {
-        final PointList pointList = new PointList(osmNodeIds.size(), nodeAccess.is3D());
-        final List<EdgeIteratorState> newEdges = new ArrayList<>(5);
+        PointList pointList = new PointList(osmNodeIds.size(), nodeAccess.is3D());
+        List<EdgeIteratorState> newEdges = new ArrayList<>(5);
         int firstNode = -1;
-        final int lastIndex = osmNodeIds.size() - 1;
+        int lastIndex = osmNodeIds.size() - 1;
         int lastInBoundsPillarNode = -1;
         try {
             for (int i = 0; i < osmNodeIds.size(); i++) {
-                final long osmNodeId = osmNodeIds.get(i);
+                long osmNodeId = osmNodeIds.get(i);
                 int tmpNode = getNodeMap().get(osmNodeId);
                 if (tmpNode == EMPTY_NODE)
                     continue;
